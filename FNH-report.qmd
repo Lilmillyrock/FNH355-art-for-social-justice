@@ -1,0 +1,203 @@
+---
+title: "Exploring the Global Burden of Disease Through an Interactive Data Dashboard"
+subtitle: "FNH 355 Assignment B: Create Art for Social Justice"
+author: "Lillian Milroy"
+format: 
+    html:
+        toc: true
+        toc-depth: 2
+editor: source
+execute:
+    echo: false
+---
+
+```{python}
+import pandas as pd
+import altair as alt
+import numpy as np
+alt.data_transformers.enable("vegafusion")
+from vega_datasets import data
+import requests
+import json
+import topojson
+
+df = pd.read_csv("uniform_data.csv")
+columns_to_fill = ['Prevalence', 'DALYs']  # Replace 'Other_Column' with the name of your second column
+df[columns_to_fill] = df[columns_to_fill].fillna(0)
+```
+
+# Welcome
+
+Welcome to the Dashboard! This project has been developed utilizing a large volume of global data sourced from IMHE, regarding a wide variety of health conditions falling into three broad categories: diarrheal diseases, intestinal nematode infections, and nutritional deficiencies. These conditions often coexist in regions experiencing poverty, exacerbating one another and engendering poor health outcomes for the individuals affected.
+
+The inspiration for this project stems from a desire to raise awareness about the health inequities experienced by communities around the world, juxtaposed against the relative unawareness in our own region. While poking around, you will find that the dashboard provides you with all the tools that you need to explore the global burden of disease landscape, and the disparities that exist within it. 
+
+# Viz 1
+## Global Prevalence Exploration
+
+This is a choropleth map! The most recent country data (2019) regarding the overall prevalence rates of the three disease categories introduced, diarrheal diseases, intestinal nematode infections, and nutritional deficiencies, have been mapped to their geographic location. The shade of a country corresponds to the overall prevalence of these diseases. Hover over a country and examine the tooltip to obtain specific prevalence rates, find country names, and make comparisons.
+
+```{python}
+yr = df[(df['Year'] == 2000) & (df['Cause'].isin(['Diarrheal diseases', 'Intestinal nematode infections', 'Nutritional deficiencies']))]
+drop = yr.drop(columns=['DALYs', "Year"])
+agg = drop.groupby(['Country', 'Cause'])['Prevalence'].sum().reset_index()
+pivoted_df = agg.pivot(index='Country', columns='Cause', values='Prevalence').reset_index()
+pivoted_df.fillna(0, inplace=True)
+pivoted_df['Total Prevalence'] = pivoted_df.iloc[:, 2:].sum(axis=1)
+
+url = "https://cdn.jsdelivr.net/npm/visionscarto-world-atlas@0.1.0/world/110m.json"
+data_map = alt.topo_feature(url, "countries")
+
+choro = alt.Chart(data_map,
+                 title=alt.Title("2019 Global Disease Prevalence Data Explorer",
+       subtitle="Interact with the map to examine regional prevalence values for diarrheal diseases, intestinal nematode infections, and nutritional deficiencies."
+   )).mark_geoshape(
+    stroke='black', strokeWidth=0.5
+).transform_lookup(
+    lookup = "properties.name", 
+    from_ = alt.LookupData(pivoted_df, "Country", ['Diarrheal diseases', 'Intestinal nematode infections', 
+                                                   'Nutritional deficiencies', 'Total Prevalence']) 
+).encode(
+    color=alt.Color('Total Prevalence:Q', 
+                    scale=alt.Scale(), 
+                    title='Total Prevalence',
+                    bin=alt.Bin(maxbins=10)),
+    tooltip = [
+    alt.Tooltip("properties.name:N", title='Country'),
+    alt.Tooltip("Diarrheal diseases:Q", title="Diarrheal Disease Prevalence", format=',.0f'),
+    alt.Tooltip("Intestinal nematode infections:Q", title="Intestinal Nematode Infection Prevalence", format=',.0f'),
+    alt.Tooltip("Nutritional deficiencies:Q", title="Nutritional Deficiencies Prevalence", format=',.0f')]
+).project('naturalEarth1'
+).properties(
+    width = 600,
+    height = 400
+).interactive()
+
+choro
+```
+
+# Viz 2
+## How Does the Burden of Disease Vary Across Different Age Groups?
+
+Diseases do not affect people indiscriminantly, especially with respect to age. In particular, diarrheal diseases tend to affect children under five more significantly than any other demographic. Use the search bar below to look up a country. On the left, you will see a breakdown of the prevalence of each disease category over time. On the right, an area chart will show the distribution of Disability-Adjusted Life Years (DALYs) over time. Filter your search to a specific age group, to see how these diseases disproportionately affect different demographics.
+
+```{python}
+limited_cause_df = df[df['Cause'].isin(['Diarrheal diseases', 'Intestinal nematode infections', 'Nutritional deficiencies'])]
+
+# Color specs
+color_domain = ['Diarrheal diseases', 'Intestinal nematode infections', 'Nutritional deficiencies']
+color_range =  ['#6699ff', '#00cc99', '#ff6666']
+
+# Country selection argument
+country_input = alt.binding(input='search', placeholder="Country Name", name='Search Country: ')
+country_selection = alt.selection_point(fields=['Country'], bind=country_input)
+
+# Age Range Selection Argument
+age_options = sorted(limited_cause_df['Age Range'].unique())
+age_range_dropdown = alt.binding_radio(options = [None] + age_options, labels = ['All'] + age_options, name = 'Select Age Range: ')
+age_range_selection = alt.selection_point(fields=['Age Range'], bind = age_range_dropdown)
+
+# Filter data based on selections
+filtered_data = alt.Chart(limited_cause_df).transform_filter(country_selection).transform_filter(age_range_selection)
+
+# Area chart
+chart1 = filtered_data.mark_area(opacity = 0.9).encode(
+    alt.X('Year:T', title = 'Time'),
+    alt.Y('sum(DALYs):Q', title = 'DALYs'),
+    #tooltip=alt.Tooltip(['DALYs'])
+).properties(
+    title='Disability-Adjusted Life Years Over Time',
+    width = 250,
+    height = 300
+)
+
+# Bar chart
+chart2 = filtered_data.mark_bar(width=9).encode(
+    alt.X('Year:T', title='Time'),
+    y='Prevalence:Q',
+    color=alt.Color("Cause:N").scale(domain = color_domain, range = color_range),
+    tooltip= [alt.Tooltip("Prevalence:Q", title="Overall Prevalence", format=',.0f')],
+).properties(
+    title='Prevalence Over Time',
+     width = 250,
+    height = 300
+)
+
+#  Combine charts into a dashboard layout
+dashboard = alt.hconcat(chart1, chart2, center = True,
+).add_params(country_selection
+).add_params(age_range_selection
+).properties(
+    title= alt.TitleParams('Disease Burden Across Age Groups',
+                            anchor = 'middle', 
+                            offset = 20,
+                            fontSize = 20,
+                          subtitle='Visualizing the historic burden of disease categories across Age Groups, using Disability-Adjusted Life Years (DALYs) and Prevalence as metrics.'
+))
+
+dashboard
+```
+
+# Viz 3
+## Nutritional Deficiency Prevalence
+
+While diarrheal diseases and intestinal nematode infections are more strictly found in particular geographic areas, nutritional deficiencies are more ubiquitous. Undernutrition exists in many shapes and forms; the phenomenon of 'hidden hunger' causes it to be prevalent in more traditionally healthy or resourced nations. Interact with the line graph below by looking up a country in the search bar. Toggle through the interactive legend to highlight different trajectories, and compare the prevalence of various nutritional conditions to that of diarrheal diseases and intestinal nematode infections.
+
+```{python}
+# Filter data for selected causes
+drop = df.drop(columns=['DALYs'])
+int = drop.groupby(['Country', 'Cause', 'Year'])['Prevalence'].sum().reset_index()
+cause_data = int[int['Cause'].isin(['Diarrheal diseases', 'Intestinal nematode infections', 'Dietary iron deficiency', 'Iodine deficiency',
+                                 'Other nutritional deficiencies', 'Protein-energy malnutrition', 'Vitamin A deficiency'])]
+
+# Country selection argument
+country_input = alt.binding(input='search', placeholder="Country Name", name='Search Country: ')
+country_selection = alt.selection_point(fields=['Country'], bind=country_input)
+
+color_domain = ['Diarrheal diseases', 'Intestinal nematode infections', 'Dietary iron deficiency', 'Iodine deficiency',
+                'Vitamin A deficiency', 'Protein-energy malnutrition', 'Other nutritional deficiencies']
+color_range =  ['#6699ff', '#00cc99', '#ff6666', '#AB9CF1', '#014432', '#008080', '#907B57']
+
+# Legend interaction argument
+cause_selection = alt.selection_point(fields=['Cause'], bind='legend', empty=False)
+bar_opacity = alt.selection_point(fields = ['Cause'], bind='legend', empty = False)
+
+# Filter data based on selections
+filtered_df = alt.Chart(cause_data).transform_filter(country_selection)
+
+# Line chart layer
+linechart = filtered_df.mark_line().encode(
+    x=alt.X('Year:Q', title='Years'),
+    y=alt.Y('Prevalence:Q', title='Prevalence'),
+    color=alt.Color('Cause:N', title='Cause').scale(domain = color_domain, range = color_range),
+    opacity=alt.condition(cause_selection, alt.value(1), alt.value(0.2)),
+    tooltip = ['Prevalence:Q', 'Cause:N']
+).properties(
+    width=600,
+    height=350,
+    title= alt.TitleParams('A Closer Look at Nutritional Deficiency Prevalence',
+                            anchor = 'middle', 
+                            offset = 20,
+                            fontSize = 20,
+                          subtitle='Search up a country by name to see the prevalence distribution of more specific nutrition-related causes over time.'
+)).add_params(country_selection
+).add_params(cause_selection)
+
+line_viz = linechart.mark_line(point=True).add_params(bar_opacity)
+line_viz.configure_view(strokeWidth = 0).configure_axis(labelFontSize=12)
+```
+
+# References
+[1] Beeching N, Gill G. Tropical Medicine: Lecture Notes. 7th ed. Hoboken: Wiley-Blackwell; 2014. 199-205 p. 
+
+[2] Jourdan PM, Lamberton PH, Fenwick A, Addiss DG. Soil-transmitted helminth infections. Lancet [Internet]. 2017 Sep;391(10117):252-65. Available from: 10.1016/S0140-6736(17)31930- X 
+
+[3] World Health Organization Regional Office for Africa. Improving nutrition outcomes with better WASH (pp. 3-17). 2017. https://www.afro.who.int/sites/default/files/2017-06/improving-nutrition-outcomes-with-better-wash_9789241565103_eng.pdf
+
+[4] Sánchez A, Gabrie JA, Usuanlele MT, Rueda MM, Canales M, Gyorkos TW. Soil-Transmitted Helminth Infections and Nutritional Status in School-age Children from Rural Communities in Honduras. PLOS Neglected Tropical Diseases [Internet]. 2013 Aug 8;7(8):e2378. Available from: https://doi.org/10.1371/journal.pntd.0002378
+		
+[5] Lwanga F, Kirunda BE, Orach CG. Intestinal helminth infections and nutritional status of children attending primary schools in Wakiso district, central Uganda. International Journal of Environmental Research and Public Health [Internet]. 2012 Aug 16;9(8):2910–21. Available from: https://doi.org/10.3390/ijerph9082910
+
+[6] Global Burden of Disease Collaborative Network. Global Burden of Disease Study 2019 (GBD 2019) Results. Seattle, United States: Institute for Health Metrics and Evaluation (IHME), 2020. Available from: https://vizhub.healthdata.org/gbd-results/
+
+[7] Fil. Visionscarto’s “World Atlas” [Internet]. Observable. 2023. Available from: https://observablehq.com/@visionscarto/world-atlas-topojson
